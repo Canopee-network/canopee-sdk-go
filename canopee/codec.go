@@ -754,20 +754,22 @@ func DecodeStruct(name string, b []byte) (any, error) {
 	return v, nil
 }
 
-// Frame wraps a payload the way the node transport does: u32 LE length + payload.
+// Frame wraps a payload the way the node transport does: u32 BE length + payload
+// (the node and Rust SDK use tokio's write_u32/read_u32, which are big-endian).
 func Frame(payload []byte) []byte {
 	out := make([]byte, 4+len(payload))
-	binary.LittleEndian.PutUint32(out, uint32(len(payload)))
+	binary.BigEndian.PutUint32(out, uint32(len(payload)))
 	copy(out[4:], payload)
 	return out
 }
 
-// ReadFrame reads exactly one length-prefixed frame from `r`.
+// ReadFrame reads exactly one length-prefixed (u32 BE) frame from `r`.
 func ReadFrame(r *Reader) ([]byte, error) {
-	n := r.U32()
-	if r.Err() != nil {
-		return nil, r.Err()
+	if r.err != nil || len(r.buf)-r.pos < 4 {
+		return nil, errors.New("bincode: truncated frame header")
 	}
+	n := binary.BigEndian.Uint32(r.buf[r.pos : r.pos+4])
+	r.pos += 4
 	if !r.need(int(n)) {
 		return nil, errors.New("bincode: truncated frame header")
 	}

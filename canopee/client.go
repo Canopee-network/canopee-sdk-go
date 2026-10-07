@@ -118,7 +118,7 @@ func unwrap(value any, expect string) (any, error) {
 
 func writeFrame(w io.Writer, payload []byte) error {
 	hdr := make([]byte, 4)
-	binary.LittleEndian.PutUint32(hdr, uint32(len(payload)))
+	binary.BigEndian.PutUint32(hdr, uint32(len(payload)))
 	if _, err := w.Write(hdr); err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func readFrame(r io.Reader) ([]byte, error) {
 	if _, err := io.ReadFull(r, hdr); err != nil {
 		return nil, err
 	}
-	n := binary.LittleEndian.Uint32(hdr)
+	n := binary.BigEndian.Uint32(hdr)
 	payload := make([]byte, n)
 	if _, err := io.ReadFull(r, payload); err != nil {
 		return nil, err
