@@ -16,6 +16,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 )
 
@@ -385,7 +386,7 @@ func codecFor(kind *WireKind) ([]Field, []Variant, error) {
 }
 
 func variantIndex(variants []Variant, v any, path string) (int, error) {
-	if s, ok := v.(string); ok {
+	if s, ok := asString(v); ok {
 		for i, variant := range variants {
 			if variant.Name == s {
 				return i, nil
@@ -402,6 +403,17 @@ func variantIndex(variants []Variant, v any, path string) (int, error) {
 			}
 			return 0, fmt.Errorf("%s: unknown variant %q", path, k)
 		}
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Map && rv.Len() == 1 {
+		keys := rv.MapKeys()
+		k, _ := asString(keys[0].Interface())
+		for i, variant := range variants {
+			if variant.Name == k {
+				return i, nil
+			}
+		}
+		return 0, fmt.Errorf("%s: unknown variant %q", path, k)
 	}
 	return 0, fmt.Errorf("%s: cannot resolve enum variant from %T", path, v)
 }
@@ -453,6 +465,38 @@ func asInt(v any) int {
 	return 0
 }
 
+// asString coerces string and named-string (e.g. ObjectType, Permission) values
+// to a plain string.
+func asString(v any) (string, bool) {
+	if s, ok := v.(string); ok {
+		return s, true
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.String && rv.Type().PkgPath() != "" {
+		return rv.String(), true
+	}
+	return "", false
+}
+
+// asMap coerces map[string]any and named map types (e.g. Resource) to a plain
+// map[string]any.
+func asMap(v any) (map[string]any, bool) {
+	if m, ok := v.(map[string]any); ok {
+		return m, true
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Map {
+		return nil, false
+	}
+	m := make(map[string]any, rv.Len())
+	iter := rv.MapRange()
+	for iter.Next() {
+		k, _ := asString(iter.Key().Interface())
+		m[k] = iter.Value().Interface()
+	}
+	return m, true
+}
+
 // EncodeValue writes `v` (a serde_json-shaped value) for `kind`.
 func EncodeValue(w *Writer, kind *WireKind, v any, path string) error {
 	switch kind.T {
@@ -465,7 +509,11 @@ func EncodeValue(w *Writer, kind *WireKind, v any, path string) error {
 	case "bool":
 		w.Bool(v.(bool))
 	case "string":
-		w.Str(v.(string))
+		s, ok := asString(v)
+		if !ok {
+			return fmt.Errorf("%s: expected string, got %T", path, v)
+		}
+		w.Str(s)
 	case "bytes":
 		b, err := toBytes(v, path)
 		if err != nil {
@@ -493,7 +541,14 @@ func EncodeValue(w *Writer, kind *WireKind, v any, path string) error {
 	case "vec":
 		arr, ok := v.([]any)
 		if !ok {
-			return fmt.Errorf("%s: expected array, got %T", path, v)
+			rv := reflect.ValueOf(v)
+			if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+				return fmt.Errorf("%s: expected array, got %T", path, v)
+			}
+			arr = make([]any, rv.Len())
+			for i := 0; i < rv.Len(); i++ {
+				arr[i] = rv.Index(i).Interface()
+			}
 		}
 		w.U64(uint64(len(arr)))
 		for i, x := range arr {
@@ -534,7 +589,7 @@ func EncodeValue(w *Writer, kind *WireKind, v any, path string) error {
 }
 
 func encodeFields(w *Writer, fields []Field, v any, path string) error {
-	m, ok := v.(map[string]any)
+	m, ok := asMap(v)
 	if !ok {
 		return fmt.Errorf("%s: expected struct object, got %T", path, v)
 	}
@@ -561,10 +616,12 @@ func encodeVariants(w *Writer, variants []Variant, v any, path string) error {
 		return nil
 	}
 	if variant.IsNewtype() {
-		payload := v.(map[string]any)[variant.Name]
+		m, _ := asMap(v)
+		payload := m[variant.Name]
 		return EncodeValue(w, variant.Fields[0].Kind, payload, path+"."+variant.Name)
 	}
-	payload, ok := v.(map[string]any)[variant.Name].(map[string]any)
+	m, ok := asMap(v)
+	payload, ok := asMap(m[variant.Name])
 	if !ok {
 		return fmt.Errorf("%s.%s: expected struct object", path, variant.Name)
 	}

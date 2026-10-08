@@ -101,7 +101,12 @@ func unwrap(value any, expect string) (any, error) {
 	if len(m) == 1 {
 		for k, v := range m {
 			if k == "Error" {
-				msg, _ := v.(string)
+				msg, _ := asString(v)
+				if msg == "" {
+					if em, ok := v.(map[string]any); ok {
+						msg, _ = asString(em["message"])
+					}
+				}
 				return nil, &Error{Message: msg}
 			}
 			if expect == "" || k == expect {
@@ -358,7 +363,7 @@ func (c *Client) LoadHomeIndex() (*HomeIndex, error) {
 }
 
 func (c *Client) SetHomeEntryShared(name string, shared bool) error {
-	_, err := c.request(command("SetHomeEntryShared", map[string]any{"name": name, "shared": shared}), "NameSet")
+	_, err := c.request(command("SetHomeEntryShared", map[string]any{"name": name, "shared": shared}), "HomeIndexSaved")
 	return err
 }
 
